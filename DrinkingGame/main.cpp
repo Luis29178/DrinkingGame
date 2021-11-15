@@ -10,6 +10,8 @@
 #else
 	#define ENABLE_LEAK_DETECTION()
 #endif
+#include <mutex>
+#include <random>
 
 class UniformRandInt
 {
@@ -92,6 +94,8 @@ struct DrinkerPool
 	// TODO:: You will need to add additional data here that will let threads
 	//   access the stopDrinkingFlag in a thread safe manner.
 	/////////////////////////////////////////////////////////////////////////
+	std::mutex muStopFlag;
+	std::condition_variable cvStopFlag;
 };
 
 ///////////////////////////////////////////////////////////////////////////////////
@@ -318,13 +322,18 @@ void DrinkerThreadEntrypoint(Drinker *currentDrinker)
 	// TODO:: Let main know there's one more drinker thread running then wait for a notification
 	//   from main via the DrinkerPool struct.
 	////////////////////////////////////////////////////////////////////////////////////////////////
+	currentDrinker->drinkerPool->drinkerCountMutex.lock();
+	currentDrinker->drinkerPool->drinkerCount = currentDrinker->drinkerPool->drinkerCount + 1;
+	currentDrinker->drinkerPool->drinkerCountMutex.unlock();
 
 	StartDrinker(currentDrinker);
 
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Let main know there's one less drinker thread running. 
 	///////////////////////////////////////////////////////////////////////////////////
-
+	currentDrinker->drinkerPool->drinkerCountMutex.lock();
+	currentDrinker->drinkerPool->drinkerCount = currentDrinker->drinkerPool->drinkerCount - 1;
+	currentDrinker->drinkerPool->drinkerCountMutex.unlock();
 	return;
 }
 
@@ -443,18 +452,23 @@ int main(int argc, char **argv)
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Create detached drinker threads
 	///////////////////////////////////////////////////////////////////////////////////
-
+	for (int i = 0; i < poolOfDrinkers.totalDrinkers;i++)
+	{
+		std::thread drinker(DrinkerThreadEntrypoint, &poolOfDrinkers.drinkers[i]);
+		drinker.detach();
+	}
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Wait for all drinkers to be ready. You may not use a spinlock here, you
 	//   must wait for changes in the pool of drinkers to avoid burning CPU cycles.
 	///////////////////////////////////////////////////////////////////////////////////
-
+	std::unique_lock<std::mutex> Drinkerlock(poolOfDrinkers.drinkerCountMutex);
+	poolOfDrinkers.drinkerCountCondition.wait(Drinkerlock, [&]() {return (poolOfDrinkers.drinkerCount == poolOfDrinkers.totalDrinkers); });
 	printf("Main: Firing gun\n");
 
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Start all of the drinkers. All of the drinkers must be ready by this point. 
 	///////////////////////////////////////////////////////////////////////////////////
-
+	poolOfDrinkers.startingGunFlag = !poolOfDrinkers.startingGunFlag;
 	// Wait for user input before telling the drinkers to stop
 	Pause();
 
@@ -464,17 +478,24 @@ int main(int argc, char **argv)
 	//   safe manner.
 	///////////////////////////////////////////////////////////////////////////////////
 
+	poolOfDrinkers.muStopFlag.lock();
+	poolOfDrinkers.stopDrinkingFlag = !poolOfDrinkers.stopDrinkingFlag;
+	poolOfDrinkers.muStopFlag.unlock();
+		
+	
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Wait for all drinkers to finish. You may not use a spinlock here, you
 	//   must wait for changes in the pool of drinkers to avoid burning CPU cycles.
 	///////////////////////////////////////////////////////////////////////////////////
-
+	std::unique_lock<std::mutex> Stoplock(poolOfDrinkers.drinkerCountMutex);
+	poolOfDrinkers.drinkerCountCondition.wait(Stoplock, [&]() {return poolOfDrinkers.drinkerCount == 0; });
 	PrintResults(poolOfDrinkers, poolOfResources);
 
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Clean up.
 	///////////////////////////////////////////////////////////////////////////////////
-
+	delete[] poolOfDrinkers.drinkers;
+	delete[] poolOfResources.resources;
 	Pause();
 	return 0;
 }
