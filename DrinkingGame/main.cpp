@@ -297,11 +297,14 @@ void StartDrinker(Drinker *currentDrinker)
 	while(true)
 	{
 		TryToDrink(currentDrinker);
-		
+
+		currentDrinker->drinkerPool->muStopFlag.lock();
 		if(currentDrinker->drinkerPool->stopDrinkingFlag)
 		{
+			currentDrinker->drinkerPool->muStopFlag.unlock();
 			break;
 		}
+		currentDrinker->drinkerPool->muStopFlag.unlock();
 	}
 }
 
@@ -494,7 +497,10 @@ int main(int argc, char **argv)
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Clean up.
 	///////////////////////////////////////////////////////////////////////////////////
-	delete[] poolOfDrinkers.drinkers;
+	
+		delete[] poolOfDrinkers.drinkers;
+	
+
 	delete[] poolOfResources.resources;
 	Pause();
 	return 0;
