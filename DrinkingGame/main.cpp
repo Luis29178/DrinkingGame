@@ -219,7 +219,7 @@ bool TryToGetResources(Drinker *currentDrinker)
 	{
 		currentDrinker->opener = firstResource;
 	}
-
+	
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Acquire the second resource. The first resource has already been acquired
 	//    for you and will be a bottle or an opener. Your job is to acquire the
@@ -250,6 +250,39 @@ bool TryToGetResources(Drinker *currentDrinker)
 	//		Do NOT pick the second resource at random. You must iterate over all of the
 	//		resources until you find one that works or you've checked them all.
 	///////////////////////////////////////////////////////////////////////////////////
+	
+	for (int i = 0; i < totalResources; i++)
+	{
+		Resource* secondResource = &currentDrinker->resourcePool->resources[i];
+		if (secondResource->resourceMutex.try_lock())
+		{
+			
+
+			secondResource->lockCount++;
+			if (secondResource->type != firstResource->type)
+			{
+
+
+				if (secondResource->type == ResourceType::Bottle)
+				{
+					currentDrinker->bottle = secondResource;
+				}
+				else
+				{
+					currentDrinker->opener = secondResource;
+				}
+				return true;
+			}
+			
+			secondResource->lockCount--;
+			secondResource->resourceMutex.unlock();
+
+
+		}
+	}
+	firstResource->lockCount--;
+	firstResource->resourceMutex.unlock();
+	
 
 	return false;
 }
@@ -316,8 +349,6 @@ void StartDrinker(Drinker *currentDrinker)
 ///////////////////////////////////////////////////////////////////////////////////
 void DrinkerThreadEntrypoint(Drinker *currentDrinker)
 {
-	int totalResources = currentDrinker->resourcePool->totalResources;
-	DrinkerPool *drinkerPool = currentDrinker->drinkerPool;
 
 	printf("Drinker %d, is ready to start\n", currentDrinker->id);
 	
@@ -326,7 +357,8 @@ void DrinkerThreadEntrypoint(Drinker *currentDrinker)
 	//   from main via the DrinkerPool struct.
 	////////////////////////////////////////////////////////////////////////////////////////////////
 	currentDrinker->drinkerPool->drinkerCountMutex.lock();
-	currentDrinker->drinkerPool->drinkerCount = currentDrinker->drinkerPool->drinkerCount + 1;
+	currentDrinker->drinkerPool->drinkerCount++;
+	currentDrinker->drinkerPool->drinkerCountCondition.notify_all();
 	currentDrinker->drinkerPool->drinkerCountMutex.unlock();
 
 	StartDrinker(currentDrinker);
@@ -335,7 +367,8 @@ void DrinkerThreadEntrypoint(Drinker *currentDrinker)
 	// TODO:: Let main know there's one less drinker thread running. 
 	///////////////////////////////////////////////////////////////////////////////////
 	currentDrinker->drinkerPool->drinkerCountMutex.lock();
-	currentDrinker->drinkerPool->drinkerCount = currentDrinker->drinkerPool->drinkerCount - 1;
+	currentDrinker->drinkerPool->drinkerCount++;
+	currentDrinker->drinkerPool->drinkerCountCondition.notify_all();
 	currentDrinker->drinkerPool->drinkerCountMutex.unlock();
 	return;
 }
@@ -450,16 +483,14 @@ int main(int argc, char **argv)
 		poolOfDrinkers.drinkers[i].bottle = nullptr;
 		poolOfDrinkers.drinkers[i].opener = nullptr;		
 		poolOfDrinkers.drinkers[i].myRand.Init(0, INT_MAX);
+		std::thread drinker(DrinkerThreadEntrypoint, &poolOfDrinkers.drinkers[i]);
+		drinker.detach();
 	}
 
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Create detached drinker threads
 	///////////////////////////////////////////////////////////////////////////////////
-	for (int i = 0; i < poolOfDrinkers.totalDrinkers;i++)
-	{
-		std::thread drinker(DrinkerThreadEntrypoint, &poolOfDrinkers.drinkers[i]);
-		drinker.detach();
-	}
+	
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Wait for all drinkers to be ready. You may not use a spinlock here, you
 	//   must wait for changes in the pool of drinkers to avoid burning CPU cycles.
@@ -471,7 +502,8 @@ int main(int argc, char **argv)
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Start all of the drinkers. All of the drinkers must be ready by this point. 
 	///////////////////////////////////////////////////////////////////////////////////
-	poolOfDrinkers.startingGunFlag = !poolOfDrinkers.startingGunFlag;
+	poolOfDrinkers.startingGunFlag = true;
+	poolOfDrinkers.startingGunCondition.notify_all();
 	// Wait for user input before telling the drinkers to stop
 	Pause();
 
@@ -482,7 +514,8 @@ int main(int argc, char **argv)
 	///////////////////////////////////////////////////////////////////////////////////
 
 	poolOfDrinkers.muStopFlag.lock();
-	poolOfDrinkers.stopDrinkingFlag = !poolOfDrinkers.stopDrinkingFlag;
+	poolOfDrinkers.stopDrinkingFlag = true;
+	poolOfDrinkers.cvStopFlag.notify_all();
 	poolOfDrinkers.muStopFlag.unlock();
 		
 	
@@ -490,18 +523,19 @@ int main(int argc, char **argv)
 	// TODO:: Wait for all drinkers to finish. You may not use a spinlock here, you
 	//   must wait for changes in the pool of drinkers to avoid burning CPU cycles.
 	///////////////////////////////////////////////////////////////////////////////////
-	std::unique_lock<std::mutex> Stoplock(poolOfDrinkers.drinkerCountMutex);
-	poolOfDrinkers.drinkerCountCondition.wait(Stoplock, [&]() {return poolOfDrinkers.drinkerCount == 0; });
+	//std::unique_lock<std::mutex> Stoplock(poolOfDrinkers.muStopFlag);
+	int cecker = drinkerCount * 2;
+	poolOfDrinkers.drinkerCountCondition.wait(Drinkerlock, [&]() {return poolOfDrinkers.drinkerCount == cecker; });
 	PrintResults(poolOfDrinkers, poolOfResources);
 
 	///////////////////////////////////////////////////////////////////////////////////
 	// TODO:: Clean up.
 	///////////////////////////////////////////////////////////////////////////////////
 	
-		delete[] poolOfDrinkers.drinkers;
-	
-
+	delete[] poolOfDrinkers.drinkers;
 	delete[] poolOfResources.resources;
+
+
 	Pause();
 	return 0;
 }
